@@ -1,0 +1,7 @@
+{
+  "name": "SlideAlign AI",
+  "description": "A Vision-Language pipeline that aligns presentation slides with transcripts (or audio) to generate speaker notes and study guides using Gemini 2.5 and 3.0 models.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
