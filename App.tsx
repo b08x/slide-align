@@ -9,15 +9,21 @@ import {
   Play, 
   Download,
   BrainCircuit,
-  AlertCircle
+  AlertCircle,
+  FileType,
+  Mic
 } from 'lucide-react';
 import { SubtitleLine, SlideData, ProcessingState, FinalOutput, InputMode } from './types';
-import { parseAssFile, inferTimeFromFilename } from './services/parserService';
+import { inferTimeFromFilename } from './services/parserService';
+import { parseAssFile } from './services/parsers/assParser';
+import { parseSrtFile } from './services/parsers/srtParser';
+import { parseVttFile } from './services/parsers/vttParser';
+import { parseTextFile } from './services/parsers/textParser';
 import { analyzeSlideImage, generateFinalReport, transcribeAudio } from './services/geminiService';
 
 const App: React.FC = () => {
   // State
-  const [inputMode, setInputMode] = useState<InputMode>(InputMode.ASS_FILE);
+  const [inputMode, setInputMode] = useState<InputMode>(InputMode.ASS);
   const [transcriptFile, setTranscriptFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [slides, setSlides] = useState<SlideData[]>([]);
@@ -34,6 +40,22 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Handlers
+  const handleStartOver = () => {
+    setTranscriptFile(null);
+    setAudioFile(null);
+    setSlides([]);
+    setProcessing({
+        step: 'upload',
+        progress: 0,
+        totalSlides: 0,
+        processedSlides: 0,
+        statusMessage: ''
+    });
+    setFinalOutput(null);
+    setError(null);
+    setInputMode(InputMode.ASS);
+  };
+
   const handleSlidesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const newSlides: SlideData[] = Array.from(e.target.files).map((f: File) => ({
@@ -71,12 +93,12 @@ const App: React.FC = () => {
       return;
     }
 
-    if (inputMode === InputMode.ASS_FILE && !transcriptFile) {
-        setError("Please upload a .ass transcript file.");
-        return;
-    }
     if (inputMode === InputMode.AUDIO_FILE && !audioFile) {
         setError("Please upload an audio file.");
+        return;
+    }
+    if (inputMode !== InputMode.AUDIO_FILE && !transcriptFile) {
+        setError("Please upload a transcript file.");
         return;
     }
 
@@ -96,24 +118,36 @@ const App: React.FC = () => {
       if (inputMode === InputMode.AUDIO_FILE && audioFile) {
         setProcessing(p => ({ ...p, step: 'transcribing_audio', statusMessage: 'Transcribing audio (Gemini Flash)...' }));
         transcriptLines = await transcribeAudio(audioFile, apiKey);
-      } else if (inputMode === InputMode.ASS_FILE && transcriptFile) {
-        setProcessing(p => ({ ...p, statusMessage: 'Parsing subtitle file...' }));
-        transcriptLines = await parseAssFile(transcriptFile);
+      } else if (transcriptFile) {
+        setProcessing(p => ({ ...p, statusMessage: `Parsing ${inputMode} file...` }));
+        switch (inputMode) {
+            case InputMode.ASS:
+                transcriptLines = await parseAssFile(transcriptFile);
+                break;
+            case InputMode.SRT:
+                transcriptLines = await parseSrtFile(transcriptFile);
+                break;
+            case InputMode.VTT:
+                transcriptLines = await parseVttFile(transcriptFile);
+                break;
+            case InputMode.TEXT:
+                transcriptLines = await parseTextFile(transcriptFile);
+                break;
+            default:
+                throw new Error("Unsupported input mode");
+        }
       }
 
       if (transcriptLines.length === 0) {
         throw new Error("No transcript data found. Check your input file.");
       }
 
-      // 2. Process Slides (Parallel but batched to avoid rate limits if necessary, 
-      // but pure parallel is usually fine for <15 RPM on free tier, paid tier higher)
-      // We'll do simple parallel for now.
+      // 2. Process Slides (Parallel but batched)
       setProcessing(p => ({ ...p, step: 'analyzing_slides', statusMessage: 'Analyzing slides with Vision...' }));
       
       const processedSlides = [...slides];
       let completed = 0;
 
-      // Use a concurrency limit? Let's just do chunks of 3 for safety
       const chunkSize = 3;
       for (let i = 0; i < processedSlides.length; i += chunkSize) {
           const chunk = processedSlides.slice(i, i + chunkSize);
@@ -167,14 +201,15 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Render Helpers
-  const renderStepIcon = (step: ProcessingState['step']) => {
-      switch(step) {
-          case 'upload': return <Upload className="w-6 h-6 text-gray-400" />;
-          case 'analyzing_slides': return <ImageIcon className="w-6 h-6 text-blue-500 animate-pulse" />;
-          case 'transcribing_audio': return <FileAudio className="w-6 h-6 text-purple-500 animate-pulse" />;
-          case 'generating_report': return <BrainCircuit className="w-6 h-6 text-amber-500 animate-spin" />;
-          case 'complete': return <CheckCircle className="w-6 h-6 text-green-500" />;
+  // Helper for accepting files
+  const getAcceptAttribute = () => {
+      switch(inputMode) {
+          case InputMode.ASS: return ".ass";
+          case InputMode.SRT: return ".srt";
+          case InputMode.VTT: return ".vtt";
+          case InputMode.TEXT: return ".txt,.md";
+          case InputMode.AUDIO_FILE: return "audio/*";
+          default: return "*";
       }
   };
 
@@ -190,7 +225,7 @@ const App: React.FC = () => {
                       <h1 className="text-xl font-bold text-slate-800">SlideAlign Report</h1>
                   </div>
                   <div className="flex gap-3">
-                      <button onClick={() => window.location.reload()} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 font-medium">Start Over</button>
+                      <button onClick={handleStartOver} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 font-medium">Start Over</button>
                       <button onClick={downloadReport} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
                           <Download className="w-4 h-4" /> Export JSON
                       </button>
@@ -294,7 +329,7 @@ const App: React.FC = () => {
                     <span className="text-lg font-bold tracking-tight">SlideAlign AI</span>
                 </div>
                 <h1 className="text-3xl font-light leading-tight mb-4">
-                    Transform your <span className="font-bold text-indigo-400">Slides</span> & <span className="font-bold text-indigo-400">Audio</span> into study guides.
+                    Transform your <span className="font-bold text-indigo-400">Slides</span> & <span className="font-bold text-indigo-400">Transcript</span> into study guides.
                 </h1>
                 <p className="text-slate-400 text-sm leading-relaxed">
                     Uses <strong>Gemini 2.5 Flash</strong> for rapid vision/audio analysis and <strong>Gemini 3 Pro</strong> (Thinking Mode) for deep alignment logic.
@@ -325,40 +360,61 @@ const App: React.FC = () => {
         {/* Right Panel: Inputs */}
         <div className="md:w-2/3 p-8 flex flex-col space-y-8 overflow-y-auto">
             
-            {/* Input Toggle */}
-            <div className="bg-slate-100 p-1 rounded-xl inline-flex w-full">
-                <button 
-                    onClick={() => setInputMode(InputMode.ASS_FILE)}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${inputMode === InputMode.ASS_FILE ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                    <FileText className="w-4 h-4" /> Transcript (.ass)
-                </button>
-                <button 
-                    onClick={() => setInputMode(InputMode.AUDIO_FILE)}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${inputMode === InputMode.AUDIO_FILE ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                    <FileAudio className="w-4 h-4" /> Audio File
-                </button>
+            {/* Input Selection */}
+            <div className="space-y-3">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Input Source</label>
+                <div className="flex flex-wrap gap-2">
+                    <button 
+                        onClick={() => setInputMode(InputMode.AUDIO_FILE)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.AUDIO_FILE ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                    >
+                        <Mic className="w-3 h-3" /> Audio File
+                    </button>
+                    <button 
+                        onClick={() => setInputMode(InputMode.ASS)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.ASS ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                    >
+                        <FileType className="w-3 h-3" /> .ASS
+                    </button>
+                    <button 
+                        onClick={() => setInputMode(InputMode.SRT)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.SRT ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                    >
+                        <FileType className="w-3 h-3" /> .SRT
+                    </button>
+                    <button 
+                        onClick={() => setInputMode(InputMode.VTT)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.VTT ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                    >
+                        <FileType className="w-3 h-3" /> .VTT
+                    </button>
+                    <button 
+                        onClick={() => setInputMode(InputMode.TEXT)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.TEXT ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                    >
+                        <FileText className="w-3 h-3" /> Text / MD
+                    </button>
+                </div>
             </div>
 
             {/* File Inputs */}
             <div className="space-y-4">
-                {inputMode === InputMode.ASS_FILE ? (
-                    <div className="relative group">
-                         <div className={`border-2 border-dashed border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors hover:border-indigo-400 ${transcriptFile ? 'bg-indigo-50/30 border-indigo-200' : ''}`}>
-                            <FileText className={`w-8 h-8 mb-2 ${transcriptFile ? 'text-indigo-500' : 'text-slate-300'}`} />
-                            <p className="text-sm font-medium text-slate-700">{transcriptFile ? transcriptFile.name : "Drop .ass file here"}</p>
-                            <p className="text-xs text-slate-400 mt-1">or click to browse</p>
-                            <input type="file" accept=".ass" onChange={handleTranscriptUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                         </div>
-                    </div>
-                ) : (
+                {inputMode === InputMode.AUDIO_FILE ? (
                     <div className="relative group">
                          <div className={`border-2 border-dashed border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors hover:border-indigo-400 ${audioFile ? 'bg-indigo-50/30 border-indigo-200' : ''}`}>
                             <FileAudio className={`w-8 h-8 mb-2 ${audioFile ? 'text-indigo-500' : 'text-slate-300'}`} />
                             <p className="text-sm font-medium text-slate-700">{audioFile ? audioFile.name : "Drop audio file here"}</p>
                             <p className="text-xs text-slate-400 mt-1">MP3, WAV, etc.</p>
                             <input type="file" accept="audio/*" onChange={handleAudioUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                         </div>
+                    </div>
+                ) : (
+                    <div className="relative group">
+                         <div className={`border-2 border-dashed border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors hover:border-indigo-400 ${transcriptFile ? 'bg-indigo-50/30 border-indigo-200' : ''}`}>
+                            <FileText className={`w-8 h-8 mb-2 ${transcriptFile ? 'text-indigo-500' : 'text-slate-300'}`} />
+                            <p className="text-sm font-medium text-slate-700">{transcriptFile ? transcriptFile.name : `Drop ${inputMode} file here`}</p>
+                            <p className="text-xs text-slate-400 mt-1">or click to browse</p>
+                            <input type="file" accept={getAcceptAttribute()} onChange={handleTranscriptUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                          </div>
                     </div>
                 )}

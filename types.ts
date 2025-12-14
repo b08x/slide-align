@@ -48,6 +48,9 @@ export interface FinalOutput {
 }
 
 export enum InputMode {
-  ASS_FILE = 'ASS_FILE',
-  AUDIO_FILE = 'AUDIO_FILE'
+  AUDIO_FILE = 'AUDIO_FILE',
+  ASS = 'ASS',
+  SRT = 'SRT',
+  VTT = 'VTT',
+  TEXT = 'TEXT'
 }
