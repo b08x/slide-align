@@ -11,10 +11,15 @@ import {
   BrainCircuit,
   AlertCircle,
   FileType,
-  Mic
+  Mic,
+  Clock,
+  ExternalLink,
+  ChevronRight,
+  Info,
+  Layers
 } from 'lucide-react';
 import { SubtitleLine, SlideData, ProcessingState, FinalOutput, InputMode } from './types';
-import { inferTimeFromFilename } from './services/parserService';
+import { inferTimeFromFilename, secondsToHms } from './services/parserService';
 import { parseAssFile } from './services/parsers/assParser';
 import { parseSrtFile } from './services/parsers/srtParser';
 import { parseVttFile } from './services/parsers/vttParser';
@@ -64,7 +69,7 @@ const App: React.FC = () => {
         filename: f.name,
         startTime: inferTimeFromFilename(f.name),
         status: 'pending' as const
-      })).sort((a, b) => (a.filename > b.filename ? 1 : -1)); // Simple sort
+      })).sort((a, b) => (a.filename > b.filename ? 1 : -1)); 
       setSlides(prev => [...prev, ...newSlides]);
     }
   };
@@ -112,11 +117,10 @@ const App: React.FC = () => {
     });
 
     try {
-      // 1. Process Transcript Source
       let transcriptLines: SubtitleLine[] = [];
       
       if (inputMode === InputMode.AUDIO_FILE && audioFile) {
-        setProcessing(p => ({ ...p, step: 'transcribing_audio', statusMessage: 'Transcribing audio (Gemini Flash)...' }));
+        setProcessing(p => ({ ...p, step: 'transcribing_audio', statusMessage: 'Transcribing audio...' }));
         transcriptLines = await transcribeAudio(audioFile, apiKey);
       } else if (transcriptFile) {
         setProcessing(p => ({ ...p, statusMessage: `Parsing ${inputMode} file...` }));
@@ -139,31 +143,24 @@ const App: React.FC = () => {
       }
 
       if (transcriptLines.length === 0) {
-        throw new Error("No transcript data found. Check your input file.");
+        throw new Error("No transcript data found.");
       }
 
-      // 2. Process Slides (Parallel but batched)
-      setProcessing(p => ({ ...p, step: 'analyzing_slides', statusMessage: 'Analyzing slides with Vision...' }));
-      
+      setProcessing(p => ({ ...p, step: 'analyzing_slides', statusMessage: 'Analyzing slides...' }));
       const processedSlides = [...slides];
       let completed = 0;
-
       const chunkSize = 3;
       for (let i = 0; i < processedSlides.length; i += chunkSize) {
           const chunk = processedSlides.slice(i, i + chunkSize);
           await Promise.all(chunk.map(async (slide) => {
               try {
                   slide.status = 'processing';
-                  // Force update UI for status
                   setSlides([...processedSlides]);
-                  
-                  const analysis = await analyzeSlideImage(slide, apiKey);
-                  slide.analysis = analysis;
+                  slide.analysis = await analyzeSlideImage(slide, apiKey);
                   slide.status = 'done';
               } catch (e) {
-                  console.error(e);
                   slide.status = 'error';
-                  slide.analysis = "Error analyzing slide.";
+                  slide.analysis = "Error.";
               } finally {
                   completed++;
                   setProcessing(p => ({ 
@@ -176,15 +173,11 @@ const App: React.FC = () => {
           }));
       }
 
-      // 3. Final Alignment (Thinking Model)
-      setProcessing(p => ({ ...p, step: 'generating_report', statusMessage: 'Aligning content with Gemini Pro Thinking Mode (this may take a minute)...' }));
+      setProcessing(p => ({ ...p, step: 'generating_report', statusMessage: 'Aligning content (Thinking Mode)...' }));
       const report = await generateFinalReport(transcriptLines, processedSlides, apiKey);
-      
       setFinalOutput(report);
       setProcessing(p => ({ ...p, step: 'complete', statusMessage: 'Done!' }));
-
     } catch (err: any) {
-      console.error(err);
       setError(err.message || "An unexpected error occurred.");
       setProcessing(p => ({ ...p, step: 'upload', statusMessage: 'Failed.' }));
     }
@@ -196,12 +189,11 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'slide_align_report.json';
+    a.download = 'alignment_report.json';
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // Helper for accepting files
   const getAcceptAttribute = () => {
       switch(inputMode) {
           case InputMode.ASS: return ".ass";
@@ -216,264 +208,229 @@ const App: React.FC = () => {
   // Views
   if (finalOutput) {
       return (
-          <div className="min-h-screen bg-slate-50 flex flex-col">
-              <header className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-10 flex items-center justify-between shadow-sm">
+          <div className="min-h-screen bg-white flex flex-col">
+              <header className="bg-slate-900 text-white px-6 py-4 sticky top-0 z-20 flex items-center justify-between shadow-xl">
                   <div className="flex items-center gap-3">
-                      <div className="bg-indigo-600 p-2 rounded-lg">
+                      <div className="bg-indigo-500 p-2 rounded-lg">
                           <BrainCircuit className="w-6 h-6 text-white" />
                       </div>
-                      <h1 className="text-xl font-bold text-slate-800">SlideAlign Report</h1>
+                      <h1 className="text-xl font-bold tracking-tight">SlideAlign <span className="text-indigo-400">Pro</span></h1>
                   </div>
-                  <div className="flex gap-3">
-                      <button onClick={handleStartOver} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 font-medium">Start Over</button>
-                      <button onClick={downloadReport} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                          <Download className="w-4 h-4" /> Export JSON
+                  <div className="flex gap-4">
+                      <button onClick={handleStartOver} className="px-4 py-2 text-sm text-slate-300 hover:text-white font-medium transition-colors">Start Over</button>
+                      <button onClick={downloadReport} className="flex items-center gap-2 bg-white text-slate-900 hover:bg-slate-100 px-4 py-2 rounded-lg text-sm font-bold transition-all transform active:scale-95 shadow-lg">
+                          <Download className="w-4 h-4" /> Export Report
                       </button>
                   </div>
               </header>
               
-              <main className="flex-1 max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-4 gap-8">
-                  {/* Sidebar Topics */}
-                  <aside className="lg:col-span-1 space-y-6">
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm sticky top-24">
-                          <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Key Topics</h2>
-                          <div className="space-y-3">
-                              {finalOutput.topics.map(topic => (
-                                  <div key={topic.id} className="group">
-                                      <h3 className="font-semibold text-slate-800 group-hover:text-indigo-600 transition-colors">{topic.title}</h3>
-                                      <p className="text-xs text-slate-500 line-clamp-2 mt-1">{topic.description}</p>
-                                  </div>
-                              ))}
-                          </div>
+              <main className="flex-1 max-w-6xl mx-auto w-full p-8 flex flex-col gap-16">
+                  {/* Topics Bar */}
+                  <section className="bg-slate-50 border border-slate-200 rounded-2xl p-6">
+                      <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                          <Layers className="w-4 h-4" /> Conceptual Framework
+                      </h2>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          {finalOutput.topics.map(topic => (
+                              <div key={topic.id} className="group cursor-default">
+                                  <h3 className="font-bold text-slate-800 flex items-center gap-1">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                      {topic.title}
+                                  </h3>
+                                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">{topic.description}</p>
+                              </div>
+                          ))}
                       </div>
-                  </aside>
+                  </section>
 
-                  {/* Main Content */}
-                  <div className="lg:col-span-3 space-y-12">
-                      {finalOutput.composite.map((item, idx) => {
-                          const slideInfo = finalOutput.slides[item.slide];
-                          const originalSlide = slides.find(s => s.filename === item.slide);
+                  {/* Main Alignment Stream */}
+                  <div className="space-y-24">
+                      {slides.map((slide, idx) => {
+                          const slideInfo = finalOutput.slides[slide.filename];
+                          if (!slideInfo) return null;
                           
                           return (
-                              <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row">
-                                  {/* Visual Column */}
-                                  <div className="md:w-1/3 bg-slate-100 p-4 flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-slate-200">
-                                      {originalSlide ? (
+                              <article key={slide.id} className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+                                  {/* Left: Slide Visual & Timestamp */}
+                                  <div className="lg:col-span-5 sticky top-24 space-y-4">
+                                      <div className="relative group">
+                                          <div className="absolute -top-3 -left-3 bg-indigo-600 text-white px-3 py-1 rounded-full text-xs font-mono font-bold shadow-lg z-10 flex items-center gap-2">
+                                              <Clock className="w-3 h-3" />
+                                              {slide.startTime !== undefined ? secondsToHms(slide.startTime) : "Manual Sync"}
+                                          </div>
                                           <img 
-                                            src={URL.createObjectURL(originalSlide.file)} 
-                                            alt={item.slide} 
-                                            className="rounded-lg shadow-md max-h-48 object-contain"
+                                            src={URL.createObjectURL(slide.file)} 
+                                            alt={slide.filename} 
+                                            className="w-full rounded-2xl shadow-2xl border border-slate-100 hover:scale-[1.02] transition-transform duration-500"
                                           />
-                                      ) : (
-                                          <div className="w-full h-32 flex items-center justify-center text-slate-400 text-xs">Image missing</div>
-                                      )}
-                                      <span className="text-xs font-mono text-slate-500 mt-3 truncate max-w-full px-2">{item.slide}</span>
-                                  </div>
+                                          <div className="mt-4 flex items-center justify-between text-[10px] font-mono text-slate-400 px-2">
+                                              <span>{slide.filename}</span>
+                                              <span>Slide {idx + 1}</span>
+                                          </div>
+                                      </div>
 
-                                  {/* Content Column */}
-                                  <div className="flex-1 p-6 space-y-6">
-                                      <div>
-                                          <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2">Speaker Notes</h4>
-                                          <p className="text-slate-800 leading-relaxed text-sm md:text-base bg-indigo-50/50 p-3 rounded-lg border border-indigo-100">
-                                              {slideInfo?.speaker_note || item.speaker_note}
+                                      {/* Secondary Info: Speaker Notes (Subtle) */}
+                                      <div className="bg-slate-50 border border-slate-100 rounded-xl p-4">
+                                          <h4 className="text-[10px] font-bold text-slate-400 uppercase mb-2 flex items-center gap-1.5">
+                                              <Info className="w-3 h-3" /> Context Note
+                                          </h4>
+                                          <p className="text-slate-600 text-xs leading-relaxed italic">
+                                              {slideInfo.speaker_note}
                                           </p>
                                       </div>
 
-                                      <div>
-                                          <h4 className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-2">Transcript Excerpt</h4>
-                                          <p className="text-slate-600 text-sm italic border-l-4 border-emerald-200 pl-3">
-                                              "{slideInfo?.aligned_transcript || item.paraphrase}"
-                                          </p>
-                                      </div>
-
-                                      {slideInfo?.broll && slideInfo.broll.length > 0 && (
-                                          <div>
-                                              <h4 className="text-xs font-bold text-amber-600 uppercase tracking-wider mb-2">B-Roll Suggestions</h4>
-                                              <div className="flex flex-wrap gap-2">
-                                                  {slideInfo.broll.map((b, i) => (
-                                                      <span key={i} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-                                                          {b}
-                                                      </span>
-                                                  ))}
-                                              </div>
+                                      {/* Secondary Info: Assets (Subtle) */}
+                                      {slideInfo.broll && (
+                                          <div className="flex flex-wrap gap-2">
+                                              {slideInfo.broll.map((asset, i) => (
+                                                  <span key={i} className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-md border border-slate-200">
+                                                      {asset}
+                                                  </span>
+                                              ))}
                                           </div>
                                       )}
                                   </div>
-                              </div>
+
+                                  {/* Right: Fine-grained Transcript Segments */}
+                                  <div className="lg:col-span-7 space-y-6 pt-2">
+                                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                          <ChevronRight className="w-4 h-4 text-indigo-400" /> Precise Transcript Alignment
+                                      </h4>
+                                      <div className="space-y-8">
+                                          {slideInfo.aligned_segments.map((seg, sIdx) => (
+                                              <div key={sIdx} className="group flex gap-6">
+                                                  <div className="flex-shrink-0 w-24">
+                                                      <span className="text-sm font-mono font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded border border-indigo-100 block text-center">
+                                                          {seg.timestamp}
+                                                      </span>
+                                                  </div>
+                                                  <div className="flex-1 border-l-2 border-slate-100 pl-6 group-hover:border-indigo-200 transition-colors">
+                                                      <p className="text-lg text-slate-800 leading-snug font-medium">
+                                                          {seg.text}
+                                                      </p>
+                                                  </div>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  </div>
+                              </article>
                           );
                       })}
                   </div>
               </main>
+
+              <footer className="bg-slate-50 border-t border-slate-200 py-12 px-8 mt-24">
+                  <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+                      <div className="flex items-center gap-2 opacity-50">
+                          <BrainCircuit className="w-5 h-5" />
+                          <span className="font-bold text-sm">SlideAlign AI</span>
+                      </div>
+                      <p className="text-xs text-slate-400 text-center md:text-right leading-relaxed max-w-sm">
+                          Engineered with Gemini 3 Pro Thinking Mode. Precise visual-to-audio temporal alignment pipeline.
+                      </p>
+                  </div>
+              </footer>
           </div>
       );
   }
 
-  // Upload & Processing View
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50/30 flex items-center justify-center p-4">
-      <div className="max-w-4xl w-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden flex flex-col md:flex-row min-h-[600px]">
+    <div className="min-h-screen bg-white flex items-center justify-center p-6">
+      <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
         
-        {/* Left Panel: Info & Status */}
-        <div className="md:w-1/3 bg-slate-900 text-white p-8 flex flex-col justify-between relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-                <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                    <path d="M0 100 C 20 0 50 0 100 100 Z" fill="white" />
-                </svg>
+        <div className="space-y-8">
+            <div className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-600 px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest">
+                <BrainCircuit className="w-4 h-4" /> Multi-Modal Alignment
             </div>
+            <h1 className="text-5xl font-extrabold text-slate-900 tracking-tight leading-none">
+                SlideAlign <span className="text-indigo-600">AI</span>
+            </h1>
+            <p className="text-xl text-slate-500 leading-relaxed max-w-md">
+                Generate high-fidelity speaker notes and study guides by aligning your presentation slides with transcripts using Gemini 3.
+            </p>
             
-            <div className="relative z-10">
-                <div className="flex items-center gap-2 mb-6">
-                    <div className="bg-indigo-500 p-2 rounded-lg">
-                        <BrainCircuit className="w-6 h-6 text-white" />
-                    </div>
-                    <span className="text-lg font-bold tracking-tight">SlideAlign AI</span>
+            <div className="space-y-4 pt-4">
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                    <CheckCircle className="w-5 h-5 text-emerald-500" />
+                    <span>Visual OCR & Slide Content Analysis</span>
                 </div>
-                <h1 className="text-3xl font-light leading-tight mb-4">
-                    Transform your <span className="font-bold text-indigo-400">Slides</span> & <span className="font-bold text-indigo-400">Transcript</span> into study guides.
-                </h1>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                    Uses <strong>Gemini 2.5 Flash</strong> for rapid vision/audio analysis and <strong>Gemini 3 Pro</strong> (Thinking Mode) for deep alignment logic.
-                </p>
-            </div>
-
-            <div className="relative z-10 space-y-6">
-                 {/* Progress Indicator */}
-                 <div className="space-y-2">
-                    <div className="flex justify-between text-xs font-medium text-slate-400">
-                        <span>STATUS</span>
-                        <span>{processing.processedSlides}/{processing.totalSlides} SLIDES</span>
-                    </div>
-                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div 
-                            className="h-full bg-indigo-500 transition-all duration-500 ease-out" 
-                            style={{ width: `${processing.progress}%` }}
-                        />
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-indigo-200 h-6">
-                        {processing.step !== 'upload' && processing.step !== 'complete' && <Loader2 className="w-3 h-3 animate-spin" />}
-                        <span className="truncate">{processing.statusMessage || "Waiting for input..."}</span>
-                    </div>
-                 </div>
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                    <CheckCircle className="w-5 h-5 text-emerald-500" />
+                    <span>Temporal Transcript Mapping</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                    <CheckCircle className="w-5 h-5 text-emerald-500" />
+                    <span>AI-Generated Conceptual Frameworks</span>
+                </div>
             </div>
         </div>
 
-        {/* Right Panel: Inputs */}
-        <div className="md:w-2/3 p-8 flex flex-col space-y-8 overflow-y-auto">
-            
-            {/* Input Selection */}
-            <div className="space-y-3">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Input Source</label>
+        <div className="bg-slate-50 border border-slate-200 rounded-3xl p-8 shadow-2xl space-y-8">
+            <div className="space-y-6">
                 <div className="flex flex-wrap gap-2">
-                    <button 
-                        onClick={() => setInputMode(InputMode.AUDIO_FILE)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.AUDIO_FILE ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
-                    >
-                        <Mic className="w-3 h-3" /> Audio File
-                    </button>
-                    <button 
-                        onClick={() => setInputMode(InputMode.ASS)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.ASS ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
-                    >
-                        <FileType className="w-3 h-3" /> .ASS
-                    </button>
-                    <button 
-                        onClick={() => setInputMode(InputMode.SRT)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.SRT ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
-                    >
-                        <FileType className="w-3 h-3" /> .SRT
-                    </button>
-                    <button 
-                        onClick={() => setInputMode(InputMode.VTT)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.VTT ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
-                    >
-                        <FileType className="w-3 h-3" /> .VTT
-                    </button>
-                    <button 
-                        onClick={() => setInputMode(InputMode.TEXT)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${inputMode === InputMode.TEXT ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
-                    >
-                        <FileText className="w-3 h-3" /> Text / MD
-                    </button>
+                    {[InputMode.AUDIO_FILE, InputMode.ASS, InputMode.SRT, InputMode.VTT, InputMode.TEXT].map(mode => (
+                        <button 
+                            key={mode}
+                            onClick={() => setInputMode(mode)}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all ${inputMode === mode ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300'}`}
+                        >
+                            {mode}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="space-y-4">
+                    <div className="relative group">
+                        <div className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center transition-all ${transcriptFile || audioFile ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:border-indigo-400'}`}>
+                            {inputMode === InputMode.AUDIO_FILE ? <Mic className="w-8 h-8 text-indigo-500 mb-2" /> : <FileText className="w-8 h-8 text-indigo-500 mb-2" />}
+                            <span className="text-sm font-bold text-slate-800">
+                                {inputMode === InputMode.AUDIO_FILE ? (audioFile ? audioFile.name : "Select Audio File") : (transcriptFile ? transcriptFile.name : `Select ${inputMode} File`)}
+                            </span>
+                            <input type="file" accept={getAcceptAttribute()} onChange={inputMode === InputMode.AUDIO_FILE ? handleAudioUpload : handleTranscriptUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                        </div>
+                    </div>
+
+                    <div className="relative group">
+                        <div className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center transition-all ${slides.length > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200 hover:border-emerald-400'}`}>
+                            <ImageIcon className="w-8 h-8 text-emerald-500 mb-2" />
+                            <span className="text-sm font-bold text-slate-800">
+                                {slides.length > 0 ? `${slides.length} Slides Uploaded` : "Select Slides (PNG/JPG)"}
+                            </span>
+                            <input type="file" multiple accept="image/*" onChange={handleSlidesUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            {/* File Inputs */}
-            <div className="space-y-4">
-                {inputMode === InputMode.AUDIO_FILE ? (
-                    <div className="relative group">
-                         <div className={`border-2 border-dashed border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors hover:border-indigo-400 ${audioFile ? 'bg-indigo-50/30 border-indigo-200' : ''}`}>
-                            <FileAudio className={`w-8 h-8 mb-2 ${audioFile ? 'text-indigo-500' : 'text-slate-300'}`} />
-                            <p className="text-sm font-medium text-slate-700">{audioFile ? audioFile.name : "Drop audio file here"}</p>
-                            <p className="text-xs text-slate-400 mt-1">MP3, WAV, etc.</p>
-                            <input type="file" accept="audio/*" onChange={handleAudioUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                         </div>
-                    </div>
+            {error && <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {error}</div>}
+
+            <button 
+                onClick={startProcessing}
+                disabled={processing.step !== 'upload'}
+                className="w-full bg-slate-900 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 hover:bg-black transition-all disabled:opacity-50 disabled:cursor-not-allowed group shadow-xl"
+            >
+                {processing.step === 'upload' ? (
+                    <>Process Pipeline <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>
                 ) : (
-                    <div className="relative group">
-                         <div className={`border-2 border-dashed border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors hover:border-indigo-400 ${transcriptFile ? 'bg-indigo-50/30 border-indigo-200' : ''}`}>
-                            <FileText className={`w-8 h-8 mb-2 ${transcriptFile ? 'text-indigo-500' : 'text-slate-300'}`} />
-                            <p className="text-sm font-medium text-slate-700">{transcriptFile ? transcriptFile.name : `Drop ${inputMode} file here`}</p>
-                            <p className="text-xs text-slate-400 mt-1">or click to browse</p>
-                            <input type="file" accept={getAcceptAttribute()} onChange={handleTranscriptUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                         </div>
-                    </div>
+                    <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span className="text-sm">{processing.statusMessage}</span>
+                    </>
                 )}
+            </button>
 
-                <div className="relative group">
-                     <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors hover:border-indigo-400">
-                        <ImageIcon className="w-8 h-8 mb-2 text-slate-300" />
-                        <p className="text-sm font-medium text-slate-700">
-                            {slides.length > 0 ? `${slides.length} slides selected` : "Upload Slides"}
-                        </p>
-                        <p className="text-xs text-slate-400 mt-1">PNG, JPG (Multiple)</p>
-                        <input type="file" multiple accept="image/*" onChange={handleSlidesUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                     </div>
-                </div>
-
-                {/* Slides Preview Grid (Mini) */}
-                {slides.length > 0 && (
-                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                        {slides.map(s => (
-                            <div key={s.id} className="relative w-16 h-12 flex-shrink-0 bg-slate-100 rounded border border-slate-200 overflow-hidden">
-                                <img src={URL.createObjectURL(s.file)} className="w-full h-full object-cover opacity-80" />
-                                {s.status === 'done' && <div className="absolute inset-0 bg-green-500/20 flex items-center justify-center"><CheckCircle className="w-4 h-4 text-green-600" /></div>}
-                                {s.status === 'processing' && <div className="absolute inset-0 bg-blue-500/20 flex items-center justify-center"><Loader2 className="w-4 h-4 text-blue-600 animate-spin" /></div>}
-                            </div>
-                        ))}
+            {processing.step !== 'upload' && (
+                <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
+                        <span>{processing.step.replace('_', ' ')}</span>
+                        <span>{Math.round(processing.progress)}%</span>
                     </div>
-                )}
-            </div>
-
-            {/* Error Message */}
-            {error && (
-                <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4" />
-                    {error}
+                    <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${processing.progress}%` }} />
+                    </div>
                 </div>
             )}
-
-            {/* Action */}
-            <div className="mt-auto">
-                <button 
-                    onClick={startProcessing}
-                    disabled={processing.step !== 'upload' && processing.step !== 'complete'}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2"
-                >
-                    {processing.step === 'upload' || processing.step === 'complete' ? (
-                        <>
-                            <Play className="w-5 h-5 fill-current" /> 
-                            Generate Alignment
-                        </>
-                    ) : (
-                        <>
-                            <Loader2 className="w-5 h-5 animate-spin" />
-                            Processing...
-                        </>
-                    )}
-                </button>
-            </div>
         </div>
-
       </div>
     </div>
   );

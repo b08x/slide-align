@@ -29,6 +29,11 @@ export interface Topic {
   keywords: string[];
 }
 
+export interface TranscriptSegment {
+  timestamp: string;
+  text: string;
+}
+
 export interface CompositeItem {
   slide: string; // filename
   speaker_note: string;
@@ -41,7 +46,7 @@ export interface FinalOutput {
   composite: CompositeItem[];
   slides: Record<string, {
     speaker_note: string;
-    aligned_transcript: string;
+    aligned_segments: TranscriptSegment[];
     broll: string[];
     topics: string[];
   }>;

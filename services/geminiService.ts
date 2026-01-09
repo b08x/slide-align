@@ -36,7 +36,7 @@ export const transcribeAudio = async (audioFile: File, apiKey: string): Promise<
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: {
         parts: [audioPart, { text: prompt }]
     },
@@ -63,7 +63,7 @@ export const analyzeSlideImage = async (slide: SlideData, apiKey: string): Promi
 
     // Use Flash for quick visual analysis
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3-flash-preview',
         contents: {
             parts: [imagePart, { text: prompt }]
         }
@@ -85,9 +85,9 @@ export const generateFinalReport = async (
         `${secondsToHms(ln.start)} --> ${secondsToHms(ln.end)} | ${ln.speaker} | ${ln.text}`
     ).join('\n');
     
-    // Truncate if too massive (though Gemini Pro context is large, good practice)
-    if (transText.length > 50000) {
-        transText = transText.substring(0, 50000) + "\n...[TRUNCATED]";
+    // Truncate if too massive
+    if (transText.length > 80000) {
+        transText = transText.substring(0, 80000) + "\n...[TRUNCATED]";
     }
 
     // Prepare Slides Text
@@ -107,15 +107,12 @@ SLIDES INFO (filename, inferred time, visual analysis):
 ${slidesRepr}
 
 TASKS:
-1) Extract key topics (3-10).
-2) Map transcript segments and slides to topics.
-3) For each slide, produce:
-   - Speaker note (2-3 sentences summary of what is being said related to this slide)
-   - Aligned transcript excerpt (paraphrased or direct quote that best matches this slide)
-   - 2 B-roll suggestions
-4) Produce a composite list for the final report.
-
-IMPORTANT: Ensure every slide provided in the input is represented in the 'slides' object and 'composite' list.
+1) Extract 3-10 key topics.
+2) For each slide, produce:
+   - aligned_segments: A list of 2-5 fine-grained transcript excerpts that directly relate to the content of this slide. Each segment MUST include its original timestamp from the transcript.
+   - speaker_note: A short summary (1-2 sentences) of the context for this slide.
+   - broll: 2-3 visual asset suggestions.
+3) Ensure every slide is accounted for.
 
 OUTPUT JSON FORMAT:
 {
@@ -123,32 +120,30 @@ OUTPUT JSON FORMAT:
   "slides": { 
      "filename_example.png": { 
         "speaker_note": "...", 
-        "aligned_transcript": "...", 
+        "aligned_segments": [
+           { "timestamp": "0:00:12.50", "text": "..." },
+           { "timestamp": "0:00:15.20", "text": "..." }
+        ],
         "broll": ["...", "..."], 
         "topics": ["t1"] 
      } 
   },
-  "composite": [ 
-     { "slide": "filename_example.png", "speaker_note": "...", "paraphrase": "..." } 
-  ]
+  "composite": [] 
 }
 `;
 
-    // Use Gemini 3 Pro with Thinking for complex alignment reasoning
     const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
         contents: systemPrompt,
         config: {
             responseMimeType: 'application/json',
             thinkingConfig: {
-                thinkingBudget: 32768 // Max thinking for complex alignment
+                thinkingBudget: 32768
             }
         }
     });
 
     const text = response.text || "{}";
-    console.log("Raw Model Response:", text);
-
     try {
         return JSON.parse(text);
     } catch (e) {
