@@ -34,22 +34,17 @@ export interface TranscriptSegment {
   text: string;
 }
 
-export interface CompositeItem {
+export interface TimelineEntry {
   slide: string; // filename
   speaker_note: string;
-  paraphrase: string;
-  broll?: string[];
+  aligned_segments: TranscriptSegment[];
+  broll: string[];
+  topics: string[];
 }
 
 export interface FinalOutput {
   topics: Topic[];
-  composite: CompositeItem[];
-  slides: Record<string, {
-    speaker_note: string;
-    aligned_segments: TranscriptSegment[];
-    broll: string[];
-    topics: string[];
-  }>;
+  timeline: TimelineEntry[];
 }
 
 export enum InputMode {

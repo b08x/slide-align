@@ -13,10 +13,11 @@ import {
   FileType,
   Mic,
   Clock,
-  ExternalLink,
   ChevronRight,
   Info,
-  Layers
+  Layers,
+  Sparkles,
+  Search
 } from 'lucide-react';
 import { SubtitleLine, SlideData, ProcessingState, FinalOutput, InputMode } from './types';
 import { inferTimeFromFilename, secondsToHms } from './services/parserService';
@@ -58,7 +59,6 @@ const App: React.FC = () => {
     });
     setFinalOutput(null);
     setError(null);
-    setInputMode(InputMode.ASS);
   };
 
   const handleSlidesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -89,22 +89,13 @@ const App: React.FC = () => {
   const startProcessing = async () => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      setError("Google Gemini API Key is not configured in environment variables.");
+      setError("Gemini API Key missing.");
       return;
     }
     
     if (slides.length === 0) {
-      setError("Please upload at least one slide.");
+      setError("Upload at least one slide.");
       return;
-    }
-
-    if (inputMode === InputMode.AUDIO_FILE && !audioFile) {
-        setError("Please upload an audio file.");
-        return;
-    }
-    if (inputMode !== InputMode.AUDIO_FILE && !transcriptFile) {
-        setError("Please upload a transcript file.");
-        return;
     }
 
     setError(null);
@@ -113,7 +104,7 @@ const App: React.FC = () => {
       progress: 0,
       totalSlides: slides.length,
       processedSlides: 0,
-      statusMessage: 'Starting pipeline...'
+      statusMessage: 'Initializing pipeline...'
     });
 
     try {
@@ -123,189 +114,146 @@ const App: React.FC = () => {
         setProcessing(p => ({ ...p, step: 'transcribing_audio', statusMessage: 'Transcribing audio...' }));
         transcriptLines = await transcribeAudio(audioFile, apiKey);
       } else if (transcriptFile) {
-        setProcessing(p => ({ ...p, statusMessage: `Parsing ${inputMode} file...` }));
+        setProcessing(p => ({ ...p, statusMessage: `Parsing ${inputMode}...` }));
         switch (inputMode) {
-            case InputMode.ASS:
-                transcriptLines = await parseAssFile(transcriptFile);
-                break;
-            case InputMode.SRT:
-                transcriptLines = await parseSrtFile(transcriptFile);
-                break;
-            case InputMode.VTT:
-                transcriptLines = await parseVttFile(transcriptFile);
-                break;
-            case InputMode.TEXT:
-                transcriptLines = await parseTextFile(transcriptFile);
-                break;
-            default:
-                throw new Error("Unsupported input mode");
+            case InputMode.ASS: transcriptLines = await parseAssFile(transcriptFile); break;
+            case InputMode.SRT: transcriptLines = await parseSrtFile(transcriptFile); break;
+            case InputMode.VTT: transcriptLines = await parseVttFile(transcriptFile); break;
+            case InputMode.TEXT: transcriptLines = await parseTextFile(transcriptFile); break;
         }
       }
 
-      if (transcriptLines.length === 0) {
-        throw new Error("No transcript data found.");
-      }
-
-      setProcessing(p => ({ ...p, step: 'analyzing_slides', statusMessage: 'Analyzing slides...' }));
+      setProcessing(p => ({ ...p, step: 'analyzing_slides', statusMessage: 'Vision Analysis...' }));
       const processedSlides = [...slides];
       let completed = 0;
-      const chunkSize = 3;
-      for (let i = 0; i < processedSlides.length; i += chunkSize) {
-          const chunk = processedSlides.slice(i, i + chunkSize);
-          await Promise.all(chunk.map(async (slide) => {
-              try {
-                  slide.status = 'processing';
-                  setSlides([...processedSlides]);
-                  slide.analysis = await analyzeSlideImage(slide, apiKey);
-                  slide.status = 'done';
-              } catch (e) {
-                  slide.status = 'error';
-                  slide.analysis = "Error.";
-              } finally {
-                  completed++;
-                  setProcessing(p => ({ 
-                      ...p, 
-                      processedSlides: completed, 
-                      progress: (completed / p.totalSlides) * 100 
-                  }));
-                  setSlides([...processedSlides]);
-              }
+      for (const slide of processedSlides) {
+          slide.status = 'processing';
+          setSlides([...processedSlides]);
+          slide.analysis = await analyzeSlideImage(slide, apiKey);
+          slide.status = 'done';
+          completed++;
+          setProcessing(p => ({ 
+              ...p, 
+              processedSlides: completed, 
+              progress: (completed / p.totalSlides) * 100 
           }));
       }
 
-      setProcessing(p => ({ ...p, step: 'generating_report', statusMessage: 'Aligning content (Thinking Mode)...' }));
+      setProcessing(p => ({ ...p, step: 'generating_report', statusMessage: 'Timeline Alignment...' }));
       const report = await generateFinalReport(transcriptLines, processedSlides, apiKey);
       setFinalOutput(report);
-      setProcessing(p => ({ ...p, step: 'complete', statusMessage: 'Done!' }));
+      setProcessing(p => ({ ...p, step: 'complete', statusMessage: 'Success' }));
     } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
-      setProcessing(p => ({ ...p, step: 'upload', statusMessage: 'Failed.' }));
+      setError(err.message || "Pipeline error.");
+      setProcessing(p => ({ ...p, step: 'upload', statusMessage: 'Failed' }));
     }
-  };
-
-  const downloadReport = () => {
-    if (!finalOutput) return;
-    const blob = new Blob([JSON.stringify(finalOutput, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'alignment_report.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const getAcceptAttribute = () => {
-      switch(inputMode) {
-          case InputMode.ASS: return ".ass";
-          case InputMode.SRT: return ".srt";
-          case InputMode.VTT: return ".vtt";
-          case InputMode.TEXT: return ".txt,.md";
-          case InputMode.AUDIO_FILE: return "audio/*";
-          default: return "*";
-      }
   };
 
   // Views
   if (finalOutput) {
       return (
-          <div className="min-h-screen bg-white flex flex-col">
-              <header className="bg-slate-900 text-white px-6 py-4 sticky top-0 z-20 flex items-center justify-between shadow-xl">
-                  <div className="flex items-center gap-3">
-                      <div className="bg-indigo-500 p-2 rounded-lg">
-                          <BrainCircuit className="w-6 h-6 text-white" />
+          <div className="min-h-screen bg-white flex flex-col text-slate-900">
+              <header className="bg-slate-950 text-white px-8 py-5 sticky top-0 z-30 flex items-center justify-between border-b border-white/10 shadow-2xl">
+                  <div className="flex items-center gap-4">
+                      <div className="bg-indigo-600 p-2 rounded-xl shadow-indigo-500/20 shadow-lg">
+                          <BrainCircuit className="w-6 h-6" />
                       </div>
-                      <h1 className="text-xl font-bold tracking-tight">SlideAlign <span className="text-indigo-400">Pro</span></h1>
+                      <div>
+                        <h1 className="text-xl font-black tracking-tighter">SlideAlign <span className="text-indigo-400 italic">Timeline</span></h1>
+                        <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest leading-none mt-1">AI-Powered Temporal Alignment</p>
+                      </div>
                   </div>
                   <div className="flex gap-4">
-                      <button onClick={handleStartOver} className="px-4 py-2 text-sm text-slate-300 hover:text-white font-medium transition-colors">Start Over</button>
-                      <button onClick={downloadReport} className="flex items-center gap-2 bg-white text-slate-900 hover:bg-slate-100 px-4 py-2 rounded-lg text-sm font-bold transition-all transform active:scale-95 shadow-lg">
-                          <Download className="w-4 h-4" /> Export Report
+                      <button onClick={handleStartOver} className="px-5 py-2 text-xs font-bold text-slate-400 hover:text-white transition-all uppercase tracking-widest">Start Over</button>
+                      <button onClick={() => window.print()} className="bg-white text-slate-950 hover:bg-slate-100 px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all shadow-xl active:scale-95">
+                          Download PDF
                       </button>
                   </div>
               </header>
               
-              <main className="flex-1 max-w-6xl mx-auto w-full p-8 flex flex-col gap-16">
-                  {/* Topics Bar */}
-                  <section className="bg-slate-50 border border-slate-200 rounded-2xl p-6">
-                      <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                          <Layers className="w-4 h-4" /> Conceptual Framework
+              <main className="flex-1 max-w-5xl mx-auto w-full p-12 space-y-32">
+                  {/* Executive Summary / Topics */}
+                  <section className="bg-slate-50 border border-slate-200/60 rounded-3xl p-8 relative overflow-hidden group">
+                      <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:scale-110 transition-transform">
+                          <Layers className="w-32 h-32" />
+                      </div>
+                      <h2 className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-6 flex items-center gap-2">
+                         <Sparkles className="w-4 h-4" /> The Conceptual Framework
                       </h2>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
                           {finalOutput.topics.map(topic => (
-                              <div key={topic.id} className="group cursor-default">
-                                  <h3 className="font-bold text-slate-800 flex items-center gap-1">
-                                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-                                      {topic.title}
-                                  </h3>
-                                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">{topic.description}</p>
+                              <div key={topic.id} className="space-y-1">
+                                  <h3 className="font-bold text-slate-900 text-lg tracking-tight">{topic.title}</h3>
+                                  <p className="text-sm text-slate-500 leading-relaxed">{topic.description}</p>
                               </div>
                           ))}
                       </div>
                   </section>
 
-                  {/* Main Alignment Stream */}
-                  <div className="space-y-24">
-                      {slides.map((slide, idx) => {
-                          const slideInfo = finalOutput.slides[slide.filename];
-                          if (!slideInfo) return null;
+                  {/* Linear Timeline Stream */}
+                  <div className="space-y-32 relative">
+                      {/* Decorative Line */}
+                      <div className="absolute left-[20%] top-0 bottom-0 w-px bg-slate-100 hidden lg:block -z-10" />
+
+                      {finalOutput.timeline.map((entry, idx) => {
+                          const originalSlide = slides.find(s => s.filename === entry.slide);
+                          if (!originalSlide) return null;
                           
                           return (
-                              <article key={slide.id} className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-                                  {/* Left: Slide Visual & Timestamp */}
-                                  <div className="lg:col-span-5 sticky top-24 space-y-4">
+                              <article key={idx} className="grid grid-cols-1 lg:grid-cols-5 gap-16 items-start">
+                                  {/* Visual Side */}
+                                  <div className="lg:col-span-2 space-y-6">
                                       <div className="relative group">
-                                          <div className="absolute -top-3 -left-3 bg-indigo-600 text-white px-3 py-1 rounded-full text-xs font-mono font-bold shadow-lg z-10 flex items-center gap-2">
-                                              <Clock className="w-3 h-3" />
-                                              {slide.startTime !== undefined ? secondsToHms(slide.startTime) : "Manual Sync"}
+                                          <div className="absolute -top-4 -left-4 bg-slate-950 text-white w-10 h-10 flex items-center justify-center rounded-2xl text-xs font-black shadow-2xl z-20 group-hover:bg-indigo-600 transition-colors">
+                                              {idx + 1}
                                           </div>
-                                          <img 
-                                            src={URL.createObjectURL(slide.file)} 
-                                            alt={slide.filename} 
-                                            className="w-full rounded-2xl shadow-2xl border border-slate-100 hover:scale-[1.02] transition-transform duration-500"
-                                          />
-                                          <div className="mt-4 flex items-center justify-between text-[10px] font-mono text-slate-400 px-2">
-                                              <span>{slide.filename}</span>
-                                              <span>Slide {idx + 1}</span>
+                                          <div className="rounded-2xl overflow-hidden shadow-[0_32px_64px_-16px_rgba(0,0,0,0.15)] border border-slate-100 group-hover:translate-y-[-4px] transition-transform duration-500">
+                                            <img 
+                                              src={URL.createObjectURL(originalSlide.file)} 
+                                              alt={entry.slide} 
+                                              className="w-full"
+                                            />
+                                          </div>
+                                          <div className="mt-4 flex justify-between px-2">
+                                              <span className="text-[10px] font-mono text-slate-300 uppercase tracking-tighter">{entry.slide}</span>
+                                              <div className="flex gap-1">
+                                                {entry.topics.map(tid => <div key={tid} className="w-2 h-2 rounded-full bg-slate-200" title={tid} />)}
+                                              </div>
                                           </div>
                                       </div>
 
-                                      {/* Secondary Info: Speaker Notes (Subtle) */}
-                                      <div className="bg-slate-50 border border-slate-100 rounded-xl p-4">
-                                          <h4 className="text-[10px] font-bold text-slate-400 uppercase mb-2 flex items-center gap-1.5">
-                                              <Info className="w-3 h-3" /> Context Note
-                                          </h4>
-                                          <p className="text-slate-600 text-xs leading-relaxed italic">
-                                              {slideInfo.speaker_note}
-                                          </p>
-                                      </div>
-
-                                      {/* Secondary Info: Assets (Subtle) */}
-                                      {slideInfo.broll && (
+                                      {/* De-emphasized metadata */}
+                                      <div className="space-y-4 px-2 opacity-60 hover:opacity-100 transition-opacity">
+                                          <div className="space-y-1">
+                                              <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Speaker Notes</h4>
+                                              <p className="text-xs text-slate-600 leading-relaxed">{entry.speaker_note}</p>
+                                          </div>
                                           <div className="flex flex-wrap gap-2">
-                                              {slideInfo.broll.map((asset, i) => (
-                                                  <span key={i} className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-md border border-slate-200">
-                                                      {asset}
+                                              {entry.broll.map((tag, i) => (
+                                                  <span key={i} className="text-[9px] font-bold text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded uppercase tracking-tighter">
+                                                      {tag}
                                                   </span>
                                               ))}
                                           </div>
-                                      )}
+                                      </div>
                                   </div>
 
-                                  {/* Right: Fine-grained Transcript Segments */}
-                                  <div className="lg:col-span-7 space-y-6 pt-2">
-                                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                          <ChevronRight className="w-4 h-4 text-indigo-400" /> Precise Transcript Alignment
+                                  {/* Transcript Side */}
+                                  <div className="lg:col-span-3 space-y-10 pt-4">
+                                      <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-widest flex items-center gap-3">
+                                          <div className="h-px bg-slate-100 flex-1" />
+                                          Linear Transcript Alignment
+                                          <div className="h-px bg-slate-100 flex-1" />
                                       </h4>
-                                      <div className="space-y-8">
-                                          {slideInfo.aligned_segments.map((seg, sIdx) => (
-                                              <div key={sIdx} className="group flex gap-6">
-                                                  <div className="flex-shrink-0 w-24">
-                                                      <span className="text-sm font-mono font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded border border-indigo-100 block text-center">
-                                                          {seg.timestamp}
-                                                      </span>
-                                                  </div>
-                                                  <div className="flex-1 border-l-2 border-slate-100 pl-6 group-hover:border-indigo-200 transition-colors">
-                                                      <p className="text-lg text-slate-800 leading-snug font-medium">
+                                      <div className="space-y-12">
+                                          {entry.aligned_segments.map((seg, sIdx) => (
+                                              <div key={sIdx} className="group relative">
+                                                  <div className="flex flex-col gap-3">
+                                                      <div className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl border border-indigo-100/50 w-fit">
+                                                          <Clock className="w-3.5 h-3.5" />
+                                                          <span className="text-xs font-black tracking-tighter tabular-nums">{seg.timestamp}</span>
+                                                      </div>
+                                                      <p className="text-xl md:text-2xl text-slate-800 leading-snug font-medium group-hover:text-black transition-colors">
                                                           {seg.text}
                                                       </p>
                                                   </div>
@@ -319,14 +267,11 @@ const App: React.FC = () => {
                   </div>
               </main>
 
-              <footer className="bg-slate-50 border-t border-slate-200 py-12 px-8 mt-24">
-                  <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
-                      <div className="flex items-center gap-2 opacity-50">
-                          <BrainCircuit className="w-5 h-5" />
-                          <span className="font-bold text-sm">SlideAlign AI</span>
-                      </div>
-                      <p className="text-xs text-slate-400 text-center md:text-right leading-relaxed max-w-sm">
-                          Engineered with Gemini 3 Pro Thinking Mode. Precise visual-to-audio temporal alignment pipeline.
+              <footer className="bg-slate-50 border-t border-slate-100 py-20 px-8">
+                  <div className="max-w-5xl mx-auto flex flex-col items-center text-center gap-6">
+                      <BrainCircuit className="w-8 h-8 text-slate-200" />
+                      <p className="text-xs text-slate-400 font-bold uppercase tracking-widest max-w-sm leading-relaxed">
+                          Synchronized visual-temporal analysis pipeline generated via Gemini 3.0 Ultra-Pro Reasoning.
                       </p>
                   </div>
               </footer>
@@ -335,101 +280,101 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-6">
-      <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <div className="max-w-4xl w-full bg-white rounded-[40px] shadow-[0_64px_128px_-32px_rgba(0,0,0,0.1)] border border-slate-100 overflow-hidden flex flex-col md:flex-row min-h-[640px]">
         
-        <div className="space-y-8">
-            <div className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-600 px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest">
-                <BrainCircuit className="w-4 h-4" /> Multi-Modal Alignment
+        {/* Brand Side */}
+        <div className="md:w-2/5 bg-slate-950 p-12 flex flex-col justify-between text-white relative">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-600/20 blur-[100px] -mr-32 -mt-32 rounded-full" />
+            <div className="relative z-10 space-y-8">
+                <div className="flex items-center gap-3">
+                    <div className="bg-indigo-600 p-2.5 rounded-2xl">
+                        <BrainCircuit className="w-7 h-7" />
+                    </div>
+                    <span className="text-xl font-black tracking-tighter">SlideAlign <span className="text-indigo-400 italic">Timeline</span></span>
+                </div>
+                <h2 className="text-4xl font-bold leading-[1.1] tracking-tight">
+                    Synchronize your <span className="text-indigo-500">voice</span> with your <span className="text-indigo-500">vision</span>.
+                </h2>
+                <p className="text-slate-400 text-sm leading-relaxed">
+                    A deep-learning pipeline that maps slide images to transcript timestamps for high-fidelity alignment.
+                </p>
             </div>
-            <h1 className="text-5xl font-extrabold text-slate-900 tracking-tight leading-none">
-                SlideAlign <span className="text-indigo-600">AI</span>
-            </h1>
-            <p className="text-xl text-slate-500 leading-relaxed max-w-md">
-                Generate high-fidelity speaker notes and study guides by aligning your presentation slides with transcripts using Gemini 3.
-            </p>
-            
-            <div className="space-y-4 pt-4">
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                    <CheckCircle className="w-5 h-5 text-emerald-500" />
-                    <span>Visual OCR & Slide Content Analysis</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                    <CheckCircle className="w-5 h-5 text-emerald-500" />
-                    <span>Temporal Transcript Mapping</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                    <CheckCircle className="w-5 h-5 text-emerald-500" />
-                    <span>AI-Generated Conceptual Frameworks</span>
-                </div>
+
+            <div className="relative z-10 space-y-6">
+                 <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                        <span>Pipeline Status</span>
+                        <span>{Math.round(processing.progress)}%</span>
+                    </div>
+                    <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                        <div className="h-full bg-indigo-500 transition-all duration-700 shadow-[0_0_12px_rgba(99,102,241,0.5)]" style={{ width: `${processing.progress}%` }} />
+                    </div>
+                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest animate-pulse min-h-[1em]">
+                        {processing.step !== 'upload' ? processing.statusMessage : ''}
+                    </p>
+                 </div>
             </div>
         </div>
 
-        <div className="bg-slate-50 border border-slate-200 rounded-3xl p-8 shadow-2xl space-y-8">
-            <div className="space-y-6">
+        {/* Input Side */}
+        <div className="md:w-3/5 p-12 flex flex-col gap-10">
+            <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Select Input Source</label>
                 <div className="flex flex-wrap gap-2">
                     {[InputMode.AUDIO_FILE, InputMode.ASS, InputMode.SRT, InputMode.VTT, InputMode.TEXT].map(mode => (
                         <button 
                             key={mode}
                             onClick={() => setInputMode(mode)}
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all ${inputMode === mode ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300'}`}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black tracking-widest uppercase transition-all border ${inputMode === mode ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl' : 'bg-white text-slate-500 border-slate-100 hover:border-slate-300'}`}
                         >
-                            {mode}
+                            {mode.replace('_', ' ')}
                         </button>
                     ))}
                 </div>
+            </div>
 
-                <div className="space-y-4">
-                    <div className="relative group">
-                        <div className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center transition-all ${transcriptFile || audioFile ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:border-indigo-400'}`}>
-                            {inputMode === InputMode.AUDIO_FILE ? <Mic className="w-8 h-8 text-indigo-500 mb-2" /> : <FileText className="w-8 h-8 text-indigo-500 mb-2" />}
-                            <span className="text-sm font-bold text-slate-800">
-                                {inputMode === InputMode.AUDIO_FILE ? (audioFile ? audioFile.name : "Select Audio File") : (transcriptFile ? transcriptFile.name : `Select ${inputMode} File`)}
-                            </span>
-                            <input type="file" accept={getAcceptAttribute()} onChange={inputMode === InputMode.AUDIO_FILE ? handleAudioUpload : handleTranscriptUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+            <div className="grid grid-cols-1 gap-4">
+                <div className="relative group">
+                    <div className={`border-2 border-dashed rounded-3xl p-8 flex flex-col items-center justify-center text-center transition-all ${transcriptFile || audioFile ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-100 hover:border-indigo-400 group-hover:scale-[1.01]'}`}>
+                        <div className="p-4 bg-white rounded-2xl shadow-sm mb-4">
+                            {inputMode === InputMode.AUDIO_FILE ? <Mic className="w-6 h-6 text-indigo-500" /> : <FileText className="w-6 h-6 text-indigo-500" />}
                         </div>
+                        <span className="text-sm font-bold text-slate-900 leading-none">
+                            {inputMode === InputMode.AUDIO_FILE ? (audioFile ? audioFile.name : "Audio Source") : (transcriptFile ? transcriptFile.name : `${inputMode} Source`)}
+                        </span>
+                        <p className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-widest">Click to Upload</p>
+                        <input type="file" onChange={inputMode === InputMode.AUDIO_FILE ? handleAudioUpload : handleTranscriptUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                     </div>
+                </div>
 
-                    <div className="relative group">
-                        <div className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center transition-all ${slides.length > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200 hover:border-emerald-400'}`}>
-                            <ImageIcon className="w-8 h-8 text-emerald-500 mb-2" />
-                            <span className="text-sm font-bold text-slate-800">
-                                {slides.length > 0 ? `${slides.length} Slides Uploaded` : "Select Slides (PNG/JPG)"}
-                            </span>
-                            <input type="file" multiple accept="image/*" onChange={handleSlidesUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                <div className="relative group">
+                    <div className={`border-2 border-dashed rounded-3xl p-8 flex flex-col items-center justify-center text-center transition-all ${slides.length > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100 hover:border-emerald-400 group-hover:scale-[1.01]'}`}>
+                        <div className="p-4 bg-white rounded-2xl shadow-sm mb-4">
+                            <ImageIcon className="w-6 h-6 text-emerald-500" />
                         </div>
+                        <span className="text-sm font-bold text-slate-900 leading-none">
+                            {slides.length > 0 ? `${slides.length} Slides Uploaded` : "Presentation Images"}
+                        </span>
+                        <p className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-widest">PNG, JPG, JPEG</p>
+                        <input type="file" multiple accept="image/*" onChange={handleSlidesUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                     </div>
                 </div>
             </div>
 
-            {error && <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {error}</div>}
+            {error && <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-[10px] font-bold uppercase tracking-widest flex items-center gap-3"><AlertCircle className="w-4 h-4" /> {error}</div>}
 
             <button 
                 onClick={startProcessing}
                 disabled={processing.step !== 'upload'}
-                className="w-full bg-slate-900 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 hover:bg-black transition-all disabled:opacity-50 disabled:cursor-not-allowed group shadow-xl"
+                className="w-full bg-slate-950 text-white font-black py-5 rounded-3xl flex items-center justify-center gap-4 hover:bg-black transition-all disabled:opacity-30 shadow-[0_24px_48px_-12px_rgba(0,0,0,0.3)] active:scale-95 group mt-auto"
             >
                 {processing.step === 'upload' ? (
-                    <>Process Pipeline <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>
+                    <><span className="uppercase tracking-widest text-xs">Run Alignment Pipeline</span> <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>
                 ) : (
-                    <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span className="text-sm">{processing.statusMessage}</span>
-                    </>
+                    <Loader2 className="w-6 h-6 animate-spin" />
                 )}
             </button>
-
-            {processing.step !== 'upload' && (
-                <div className="space-y-2">
-                    <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
-                        <span>{processing.step.replace('_', ' ')}</span>
-                        <span>{Math.round(processing.progress)}%</span>
-                    </div>
-                    <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                        <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${processing.progress}%` }} />
-                    </div>
-                </div>
-            )}
         </div>
       </div>
     </div>

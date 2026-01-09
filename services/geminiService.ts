@@ -19,8 +19,6 @@ const fileToGenerativePart = async (file: File) => {
 export const transcribeAudio = async (audioFile: File, apiKey: string): Promise<SubtitleLine[]> => {
   if (!apiKey) throw new Error("API Key is required");
   const ai = new GoogleGenAI({ apiKey });
-  
-  // Use Flash for audio transcription
   const audioPart = await fileToGenerativePart(audioFile);
   
   const prompt = `
@@ -32,7 +30,6 @@ export const transcribeAudio = async (audioFile: File, apiKey: string): Promise<
     [
       { "start": number (seconds), "end": number (seconds), "speaker": "string", "text": "string" }
     ]
-    Do not wrap in markdown code blocks. Just the raw JSON.
   `;
 
   const response = await ai.models.generateContent({
@@ -45,11 +42,9 @@ export const transcribeAudio = async (audioFile: File, apiKey: string): Promise<
     }
   });
 
-  const text = response.text || "[]";
   try {
-    return JSON.parse(text);
+    return JSON.parse(response.text || "[]");
   } catch (e) {
-    console.error("Failed to parse audio transcription", e);
     return [];
   }
 };
@@ -57,11 +52,9 @@ export const transcribeAudio = async (audioFile: File, apiKey: string): Promise<
 export const analyzeSlideImage = async (slide: SlideData, apiKey: string): Promise<string> => {
     if (!apiKey) throw new Error("API Key is required");
     const ai = new GoogleGenAI({ apiKey });
-
     const imagePart = await fileToGenerativePart(slide.file);
-    const prompt = "Describe this presentation slide in detail. Transcribe all visible text exactly as it appears. Identify any charts, diagrams, or images.";
+    const prompt = "Analyze this presentation slide. Extract text and summarize the key visual components and purpose.";
 
-    // Use Flash for quick visual analysis
     const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: {
@@ -80,55 +73,49 @@ export const generateFinalReport = async (
     if (!apiKey) throw new Error("API Key is required");
     const ai = new GoogleGenAI({ apiKey });
 
-    // Prepare Transcript Text
-    let transText = transcript.map(ln => 
-        `${secondsToHms(ln.start)} --> ${secondsToHms(ln.end)} | ${ln.speaker} | ${ln.text}`
+    const transText = transcript.map(ln => 
+        `[${secondsToHms(ln.start)}] ${ln.speaker}: ${ln.text}`
     ).join('\n');
     
-    // Truncate if too massive
-    if (transText.length > 80000) {
-        transText = transText.substring(0, 80000) + "\n...[TRUNCATED]";
-    }
-
-    // Prepare Slides Text
     const slidesRepr = slides.map(s => {
         const timeStr = s.startTime !== undefined ? secondsToHms(s.startTime) : "unknown";
-        return `Filename: ${s.filename} | Timestamp: ${timeStr}\nVisual Analysis & OCR:\n${s.analysis}\n---`;
+        return `Filename: ${s.filename} | Base Timestamp: ${timeStr}\nContent:\n${s.analysis}\n---`;
     }).join('\n\n');
 
     const systemPrompt = `
-You are an expert assistant for producing speaker notes and aligning transcripts to slides.
+You are an expert alignment engine. You produce a CHRONOLOGICAL TIMELINE of a presentation based on audio transcripts and slide visuals.
 
 INPUTS:
-TRANSCRIPT (timestamp | speaker | text):
+TRANSCRIPT:
 ${transText}
 
-SLIDES INFO (filename, inferred time, visual analysis):
+SLIDES DATA:
 ${slidesRepr}
 
-TASKS:
-1) Extract 3-10 key topics.
-2) For each slide, produce:
-   - aligned_segments: A list of 2-5 fine-grained transcript excerpts that directly relate to the content of this slide. Each segment MUST include its original timestamp from the transcript.
-   - speaker_note: A short summary (1-2 sentences) of the context for this slide.
-   - broll: 2-3 visual asset suggestions.
-3) Ensure every slide is accounted for.
+INSTRUCTIONS:
+1. Create a "timeline" which is an array of entries.
+2. Each entry corresponds to a slide being presented at a specific point in time.
+3. IMPORTANT: A slide (filename) may appear MULTIPLE TIMES in the timeline if the speaker returns to it later or if the slide covers separate disconnected segments of audio.
+4. For each timeline entry, provide:
+   - slide: The filename.
+   - aligned_segments: 1-4 specific lines from the transcript that match this occurrence. Include their exact timestamps.
+   - speaker_note: A high-level context note.
+   - broll: Visual asset keywords.
+   - topics: Array of IDs from the "topics" section.
+5. Create a "topics" list of 3-6 main concepts discussed.
 
 OUTPUT JSON FORMAT:
 {
-  "topics": [ { "id": "t1", "title": "...", "description": "...", "keywords": ["..."] } ],
-  "slides": { 
-     "filename_example.png": { 
-        "speaker_note": "...", 
-        "aligned_segments": [
-           { "timestamp": "0:00:12.50", "text": "..." },
-           { "timestamp": "0:00:15.20", "text": "..." }
-        ],
-        "broll": ["...", "..."], 
-        "topics": ["t1"] 
-     } 
-  },
-  "composite": [] 
+  "topics": [ { "id": "t1", "title": "...", "description": "..." } ],
+  "timeline": [
+     {
+        "slide": "filename.png",
+        "speaker_note": "...",
+        "aligned_segments": [ { "timestamp": "0:00:10", "text": "..." } ],
+        "broll": ["image of X"],
+        "topics": ["t1"]
+     }
+  ]
 }
 `;
 
@@ -137,17 +124,13 @@ OUTPUT JSON FORMAT:
         contents: systemPrompt,
         config: {
             responseMimeType: 'application/json',
-            thinkingConfig: {
-                thinkingBudget: 32768
-            }
+            thinkingConfig: { thinkingBudget: 32768 }
         }
     });
 
-    const text = response.text || "{}";
     try {
-        return JSON.parse(text);
+        return JSON.parse(response.text || "{}");
     } catch (e) {
-        console.error("Failed to parse final report", e);
-        throw new Error("Failed to generate valid JSON report.");
+        throw new Error("Alignment engine produced invalid response.");
     }
 };
